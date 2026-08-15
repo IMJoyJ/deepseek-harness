@@ -34,6 +34,8 @@ import {
 } from '@deepseek-ai/dsh-app-boot'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { installProxyFromEnvironment } from '@deepseek-ai/dsh-http-proxy'
+/** Environment override for the per-preset patch directory; empty disables it. */
+const PRESET_PATCH_DIR_ENV = 'DSH_PRESET_PATCH_DIR'
 import { DSH_LAUNCH_ENVIRONMENT_KEY, type LaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
 import { provideCmdline, type AppReady } from '@deepseek-ai/dsh-cmdline'
 import { createProcessShutdown, type ProcessShutdown } from './process-shutdown.ts'
@@ -238,6 +240,26 @@ async function composeProfile(
     if (typeof row.id === 'string') rows.set(row.id, row)
   }
   const composedOverlays = [...overlays]
+  // Per-preset patch layers: user-level `<id>.yml` over the shipped
+  // compositions. Defaults to `<dshHome>/preset-patches`; `DSH_PRESET_PATCH_DIR`
+  // overrides it, and an empty value disables the layer entirely. Shipped root
+  // discovery is the agent-presets package's own in this release, so only the
+  // patch directory is injected here.
+  if (rows.has('agent-presets')) {
+    const patchDirEnv = process.env[PRESET_PATCH_DIR_ENV]
+    const presetPatchDir = patchDirEnv === undefined
+      ? join(resolveDshHome(), 'preset-patches')
+      : (patchDirEnv === '' ? undefined : patchDirEnv)
+    if (presetPatchDir !== undefined) {
+      composedOverlays.push({
+        id: 'agent-presets',
+        config: {
+          ...(rows.get('agent-presets')?.config ?? {}) as Record<string, unknown>,
+          presetPatchDir,
+        },
+      })
+    }
+  }
   const telemetryPatch = resolveTelemetryPatch(process.env.DSH_TELEMETRY_DISABLED, rows.has(TELEMETRY_ROW_ID))
   if (telemetryPatch !== undefined) composedOverlays.push(telemetryPatch)
   return { profile, bundlePatches, homePatches, overlays: composedOverlays }

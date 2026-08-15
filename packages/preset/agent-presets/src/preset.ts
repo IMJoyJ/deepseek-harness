@@ -67,4 +67,13 @@ export interface Config {
    * configured root. False mounts a roster without the derived writable root.
    */
   includeUserRoot: boolean
+  /**
+   * Optional directory holding per-preset patch layers (`<id>.yml`, plus a
+   * `default.yml` shared base). When set, the named directory is read at mount
+   * time and its patches are applied over each preset's composition — merge by
+   * default, or `override: true` inside one file to ignore the shared base.
+   * Absent (the default) means no patch layer: mounting a preset stays a pure
+   * read of its own composition.
+   */
+  presetPatchDir?: string
 }

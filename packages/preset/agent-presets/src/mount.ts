@@ -14,11 +14,14 @@
  * @module @deepseek-ai/dsh-agent-presets/mount
  */
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context, type Fiber } from '@deepseek-ai/cordis'
-import { Include } from '@deepseek-ai/cordis-plugin-include'
+import { Include, entryListSchema, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import type { EntryTree } from '@deepseek-ai/cordis-plugin-loader'
 import { scopeOf, scopeParentOf, type ScopeKey } from '@deepseek-ai/dsh-scope'
+import * as yaml from 'js-yaml'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import type { AgentPreset } from './preset.ts'
 import { classifyRowSpecifier } from './specifier.ts'
@@ -366,16 +369,104 @@ function mountDetail(error: unknown): string {
 }
 
 /**
+ * The preset id of the shared patch layer. `default.yml` applies to every
+ * preset; a `<id>.yml` file then layers on top of it for that one preset.
+ */
+const DEFAULT_PATCH_ID = 'default'
+
+/**
+ * The structured (`{ override, patches }`) form of a preset patch file. A bare
+ * top-level array is the merge form: it layers on top of the default. The
+ * structured form with `override: true` replaces the default entirely — the
+ * default layer is ignored and only this file's patches apply.
+ */
+interface PresetPatchDocument {
+  /** When true, ignore the default layer and apply only `patches`. */
+  override?: boolean
+  patches: PatchOptions[]
+}
+
+type PresetPatchLayer = PatchOptions[] | PresetPatchDocument
+
+/**
+ * Load one optional patch file as a layer.
+ * @param file - the absolute path to read.
+ * @returns the parsed layer (`PatchOptions[]` for a bare array, or the
+ *   structured document), or `undefined` when the file does not exist.
+ * @throws when the file is unreadable, unparsable, or not a patch layer.
+ */
+function loadPatchLayer(file: string): PresetPatchLayer | undefined {
+  let content: string
+  try {
+    content = readFileSync(file, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return undefined
+    throw new Error(`agent-presets: failed to read preset patches ${file}: ${String(error)}`)
+  }
+  let parsed: unknown
+  try {
+    parsed = yaml.load(content, { schema: entryListSchema })
+  } catch (error) {
+    throw new Error(`agent-presets: preset patches ${file} is not valid YAML: ${String(error)}`)
+  }
+  if (Array.isArray(parsed)) return parsed as PatchOptions[]
+  if (parsed !== null && typeof parsed === 'object') {
+    const doc = parsed as { override?: unknown; patches?: unknown }
+    if (Array.isArray(doc.patches)) {
+      return {
+        ...(doc.override === true ? { override: true } : {}),
+        patches: doc.patches as PatchOptions[],
+      }
+    }
+    throw new Error(`agent-presets: preset patches ${file} must be an array or { override, patches }`)
+  }
+  throw new Error(`agent-presets: preset patches ${file} must be a top-level array or { override, patches }`)
+}
+
+/**
+ * Load the patch layers for one preset from `patchDir`: the shared
+ * `default.yml`, then the preset's `{id}.yml`. A missing file means "no layer"
+ * and is not an error; an unreadable or unparsable file throws, so a present
+ * patch layer that cannot apply fails loud at mount rather than silently
+ * mounting the preset unpatched.
+ *
+ * The preset file is a bare array in the common merge case (its patches layer
+ * on top of the default), or `{ override: true, patches: [...] }` to ignore the
+ * default entirely and apply only its own patches.
+ * @param patchDir - the configured patch directory, or undefined for no layer.
+ * @param id - the preset id whose patch layers to load.
+ * @returns the concatenated patches (default first, preset-specific last) when
+ *   merging, only the preset's patches when it overrides, or `undefined` when
+ *   `patchDir` is unset or neither file exists.
+ */
+function loadPresetPatches(patchDir: string | undefined, id: string): PatchOptions[] | undefined {
+  if (patchDir === undefined) return undefined
+  const base = loadPatchLayer(join(patchDir, `${DEFAULT_PATCH_ID}.yml`))
+  const specific = id === DEFAULT_PATCH_ID
+    ? undefined
+    : loadPatchLayer(join(patchDir, `${id}.yml`))
+  if (base === undefined && specific === undefined) return undefined
+  const defaultPatches: PatchOptions[] = Array.isArray(base) ? base : (base?.patches ?? [])
+  if (specific === undefined) return defaultPatches
+  if (Array.isArray(specific)) return [...defaultPatches, ...specific]
+  // Structured document: override — ignore the default, apply only this file.
+  if (specific.override === true) return specific.patches
+  return [...defaultPatches, ...specific.patches]
+}
+
+/**
  * Mount `preset` under `agentCtx` and return only once every row is usable.
  *
  * The subtree is owned by `agentCtx`'s fiber, so it unwinds with the agent and
  * the caller receives no disposer. A rejection leaves nothing mounted.
  * @param agentCtx - the agent's scope context, from the agent factory's `setup`.
  * @param preset - the resolved preset to compose the agent from.
+ * @param patchDir - optional directory of per-preset patch layers; absent means
+ *   the preset's own composition mounts unpatched.
  * @throws when `agentCtx` carries no scope, a row is unusable, or a row
  * published a service into the root realm.
  */
-export async function mountPreset(agentCtx: Context, preset: AgentPreset): Promise<void> {
+export async function mountPreset(agentCtx: Context, preset: AgentPreset, patchDir?: string): Promise<void> {
   const scope = scopeOf(agentCtx)
   if (scope === undefined) {
     throw new Error(
@@ -383,7 +474,11 @@ export async function mountPreset(agentCtx: Context, preset: AgentPreset): Promi
       + 'its registrations would apply to every agent in the process',
     )
   }
-  const config: Include.Config = { path: pathToFileURL(preset.path).href }
+  const patches = loadPresetPatches(patchDir, preset.id)
+  const config: Include.Config = {
+    path: pathToFileURL(preset.path).href,
+    ...(patches === undefined ? {} : { patches }),
+  }
   // Captured before the subtree exists: the standing scope context still
   // carries the host composition's base, which is inside the installed
   // harness and is therefore where a row's package name has to resolve from.
