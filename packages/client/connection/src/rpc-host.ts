@@ -1,7 +1,7 @@
 /** Host registry and HTTP adapter for generic Connection RPC channels. */
 
 import { Context, Service } from '@deepseek-ai/cordis'
-import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
+import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
 import {
   RpcId,
   type ClientRequest,
@@ -175,15 +175,14 @@ export class HostConnectionService extends Service implements HostConnectionHand
         await bridge(req, res, fetchHandler)
       },
     }
-    const fiber = owner.inject(['webServer'], (webCtx) => {
-      return webCtx.effect(
-        () => webCtx.webServer.register(route),
-        `client-connection: ${channel} rpc channel`,
-      )
-    })
-    return async () => {
-      await fiber.dispose()
+    const webServer = (owner.get('webServer') ?? this.ctx.root.get('webServer')) as WebServer | undefined
+    if (webServer === undefined) {
+      throw new Error(`client-connection: cannot register ${channel} rpc channel: webServer service is not available`)
     }
+    return owner.effect(
+      () => webServer.register(route),
+      `client-connection: ${channel} rpc channel`,
+    )
   }
 
   private registerInterceptor(
