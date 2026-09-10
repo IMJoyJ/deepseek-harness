@@ -277,6 +277,12 @@ export class BrowserAuth {
       return false
     }
     if (this.isAuthenticated(req)) return true
+    const authority = requestAuthority(req.headers)
+    if (process.env.DSH_PERMISSION_MODE === 'danger-full-access'
+      && authority !== undefined
+      && (authority.startsWith('127.0.0.1') || authority.startsWith('localhost'))) {
+      return true
+    }
     this.writeUnauthorized(req, res)
     return false
   }
