@@ -408,6 +408,37 @@ function normalizeLegacyMessage(
         },
       }
     }
+    case 'subagent/descriptor': {
+      if (data['version'] === 2) {
+        return {
+          ...event,
+          data: {
+            ...data,
+            version: 3,
+          },
+        }
+      }
+      return event
+    }
+    case 'agent/inbox/spliced': {
+      if (!Array.isArray(data['inserted'])) return event
+      let modified = false
+      const inserted = (data['inserted'] as SessionFormatJsonValue[]).map((item, index) => {
+        if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+          const rec = item as Record<string, SessionFormatJsonValue>
+          if (!Object.hasOwn(rec, 'role') || !Object.hasOwn(rec, 'id')) {
+            modified = true
+            return {
+              id: legacyMessageId(sessionId, event.seq + index),
+              role: 'user',
+              ...rec,
+            }
+          }
+        }
+        return item
+      })
+      return modified ? { ...event, data: { ...data, inserted } } : event
+    }
     default:
       return event
   }

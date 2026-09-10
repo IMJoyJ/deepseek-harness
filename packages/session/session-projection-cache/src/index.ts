@@ -428,7 +428,17 @@ function predecessorIdentityMatches(
 ): boolean {
   const predecessor = stored.formatVersion === undefined
     || stored.formatVersion < expected.formatVersion
-  return predecessor && lifecycleIdentityMatches(stored, expected)
+  return predecessor && predecessorLifecycleIdentityMatches(stored, expected)
+}
+
+/** Predecessor title listings do not know the exact inherited event cut ahead of hydration. */
+function predecessorLifecycleIdentityMatches(
+  stored: CheckpointIdentity,
+  expected: CurrentCheckpointIdentity,
+): boolean {
+  return stored.createdAt === expected.createdAt
+    && stored.cwd === expected.cwd
+    && (stored.isSeeded ?? false) === expected.isSeeded
 }
 
 /** Match the format-independent fields that distinguish one Session lifecycle. */
