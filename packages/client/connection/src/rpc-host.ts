@@ -175,10 +175,15 @@ export class HostConnectionService extends Service implements HostConnectionHand
         await bridge(req, res, fetchHandler)
       },
     }
-    return owner.effect(
-      () => owner.webServer.register(route),
-      `client-connection: ${channel} rpc channel`,
-    )
+    const fiber = owner.inject(['webServer'], (webCtx) => {
+      return webCtx.effect(
+        () => webCtx.webServer.register(route),
+        `client-connection: ${channel} rpc channel`,
+      )
+    })
+    return async () => {
+      await fiber.dispose()
+    }
   }
 
   private registerInterceptor(
