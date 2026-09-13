@@ -107,6 +107,19 @@ function cookieName(authority: string): string {
   return COOKIE_PREFIX + encodeBase64Url(createHash('sha256').update(authority).digest())
 }
 
+/**
+ * Whether the loopback trust exemption applies to one request authority.
+ * Deployments launched with full user authority (`danger-full-access`) treat
+ * loopback-only clients as trusted; index, RPC, and WebSocket upgrades share
+ * this single rule so a page that loads cannot wedge into an
+ * authentication-reconnect loop.
+ */
+function isLoopbackDangerBypass(authority: string | undefined): boolean {
+  return process.env.DSH_PERMISSION_MODE === 'danger-full-access'
+    && authority !== undefined
+    && (authority.startsWith('127.0.0.1') || authority.startsWith('localhost'))
+}
+
 /** Read the exact generated cookie without implementing general Cookie decoding. */
 function cookieValue(headerValue: string, name: string): string | undefined {
   for (const segment of headerValue.split(';')) {
@@ -231,8 +244,9 @@ export class BrowserAuth {
 
   /**
    * Authenticate an index request. A valid root query token mints the cookie
-   * and redirects to clean `/`; a valid cookie lets the caller serve the
-   * index; every other request receives the same minimal 401 response.
+   * and redirects to clean `/`; a valid cookie or the loopback trust exemption
+   * lets the caller serve the index; every other request receives the same
+   * minimal 401 response.
    * @param req - incoming root or configured-index request.
    * @param res - response owned when this method returns false.
    * @returns true only when the caller may serve index.html.
@@ -277,23 +291,20 @@ export class BrowserAuth {
       return false
     }
     if (this.isAuthenticated(req)) return true
-    const authority = requestAuthority(req.headers)
-    if (process.env.DSH_PERMISSION_MODE === 'danger-full-access'
-      && authority !== undefined
-      && (authority.startsWith('127.0.0.1') || authority.startsWith('localhost'))) {
-      return true
-    }
     this.writeUnauthorized(req, res)
     return false
   }
 
   /**
-   * Verify the authority-bound browser cookie on a Host request.
+   * Verify the authority-bound browser cookie on a Host request. Under the
+   * loopback trust exemption ({@link isLoopbackDangerBypass}) every loopback
+   * request is trusted without a cookie.
    * @param request - request headers carrying Host and Cookie.
-   * @returns true only for an unexpired cookie signed by this activation's loaded secret.
+   * @returns true for the exemption or an unexpired cookie signed by this activation's loaded secret.
    */
   isAuthenticated(request: ConnectionTrustRequest): boolean {
     const authority = requestAuthority(request.headers)
+    if (isLoopbackDangerBypass(authority)) return true
     const rawCookie = header(request.headers, 'cookie')
     if (authority === undefined || rawCookie === undefined) return false
     const value = cookieValue(rawCookie, cookieName(authority))

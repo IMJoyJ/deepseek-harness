@@ -247,4 +247,40 @@ describe('BrowserAuth', () => {
     await expect(createAuth(new RecordCredentials(), Number.MAX_SAFE_INTEGER))
       .rejects.toThrow(/safe timestamp range/u)
   })
+
+  describe('loopback trust exemption', () => {
+    const savedMode = process.env.DSH_PERMISSION_MODE
+    afterEach(() => {
+      if (savedMode === undefined) delete process.env.DSH_PERMISSION_MODE
+      else process.env.DSH_PERMISSION_MODE = savedMode
+    })
+
+    it('trusts every loopback request without a cookie when fully delegated', async () => {
+      process.env.DSH_PERMISSION_MODE = 'danger-full-access'
+      const auth = await createAuth(new RecordCredentials())
+      expect(auth.isAuthenticated({ headers: { host: '127.0.0.1:3080' } })).toBe(true)
+      expect(auth.isAuthenticated({ headers: { host: 'localhost:3080' } })).toBe(true)
+      expect(auth.isAuthenticated({ headers: { host: 'localhost' } })).toBe(true)
+      const res = response()
+      expect(auth.authorizeIndex(request('/', '127.0.0.1:3080'), res.value)).toBe(true)
+      expect(auth.isAuthenticated({ headers: { host: '192.168.1.20:3080' } })).toBe(false)
+      expect(auth.isAuthenticated({ headers: {} })).toBe(false)
+    })
+
+    it('keeps cookie-required authentication outside the exemption', async () => {
+      delete process.env.DSH_PERMISSION_MODE
+      const auth = await createAuth(new RecordCredentials())
+      expect(auth.isAuthenticated({ headers: { host: '127.0.0.1:3080' } })).toBe(false)
+      process.env.DSH_PERMISSION_MODE = 'workspace-write'
+      expect(auth.isAuthenticated({ headers: { host: '127.0.0.1:3080' } })).toBe(false)
+    })
+
+    it('rescues a stale loopback launch token with the clean-URL redirect', async () => {
+      process.env.DSH_PERMISSION_MODE = 'danger-full-access'
+      const auth = await createAuth(new RecordCredentials())
+      const res = response()
+      expect(auth.authorizeIndex(request('/?token=stale', '127.0.0.1:3080'), res.value)).toBe(false)
+      expect(res.state).toMatchObject({ status: 303, headers: { location: '/' } })
+    })
+  })
 })
