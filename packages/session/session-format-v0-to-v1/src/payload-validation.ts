@@ -148,6 +148,7 @@ export function assertReleasedPayloadSemantics(event: SessionFormatEvent, versio
       return
     case 'permission/preset':
       nonEmptyString(data['preset'], `${label} preset`)
+      if (data['origin'] !== undefined) nonEmptyString(data['origin'], `${label} origin`)
       return
     case 'plan/mode':
       booleanValue(data['active'], `${label} active`)
@@ -953,7 +954,7 @@ function modelRouteValue(value: SessionFormatJsonValue | undefined, label: strin
 }
 
 function subagentDescriptorValue(data: JsonRecord, label: string): void {
-  literalValue(data['version'], [3], `${label} version`)
+  literalValue(data['version'], [2, 3], `${label} version`)
   nonEmptyString(data['provider'], `${label} provider`)
   if (data['mode'] === 'one-shot') {
     assertReleasedV0Keys(data, ['mode', 'version', 'provider'], ['label'], `${label} data`)
