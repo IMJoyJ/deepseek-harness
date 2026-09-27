@@ -593,6 +593,31 @@ describe('connection node half', () => {
     await remove()
     await fiber.dispose()
   })
+
+  it('allows caller plugins without a static webServer injection to register rpc handlers', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    provideBrowserCredentials(ctx)
+    ctx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+    const connectionFiber = ctx.plugin({ inject: [...inject], apply }, { trustedHosts: ['harness.example'] })
+    await connectionFiber.await()
+
+    let registered = false
+    const callerFiber = ctx.plugin({
+      inject: ['connection'],
+      apply(callerCtx) {
+        callerCtx.connection.rpc.handle('/caller-rpc', async () => ({ ok: true, value: null }))
+        registered = true
+      },
+    })
+    await callerFiber.await()
+    expect(registered).toBe(true)
+    expect(routes.some(r => r.path === '/caller-rpc')).toBe(true)
+
+    await callerFiber.dispose()
+    expect(routes.some(r => r.path === '/caller-rpc')).toBe(false)
+    await connectionFiber.dispose()
+  })
 })
 
 describe('connection node half over a real HTTP server', () => {
