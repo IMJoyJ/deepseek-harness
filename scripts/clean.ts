@@ -136,7 +136,7 @@ export class RepositoryCleaner {
         const typesDirectory = resolve(parsed.options.outDir)
         const outputDirectory = basename(typesDirectory) === 'types'
           ? dirname(typesDirectory)
-          : typesDirectory === nativeEntryOutput
+          : typesDirectory === nativeEntryOutput || basename(typesDirectory) === 'desktop-keyboard-test-types'
             ? typesDirectory
             : undefined
         if (outputDirectory === undefined) {
