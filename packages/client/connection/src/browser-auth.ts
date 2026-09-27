@@ -8,6 +8,7 @@ import type {
   ConnectionIndexResponse,
   ConnectionTrustRequest,
 } from './rpc.ts'
+import { isLoopbackHostname } from './loopback-hostname.ts'
 
 const AUTH_RECORD_KEY = credentialKey('client-connection', 'browser-session')
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1000
@@ -105,6 +106,23 @@ function tokenMatches(actual: string, expected: string): boolean {
 
 function cookieName(authority: string): string {
   return COOKIE_PREFIX + encodeBase64Url(createHash('sha256').update(authority).digest())
+}
+
+/**
+ * Whether the loopback trust exemption applies to one request authority.
+ * Deployments launched with full user authority (`danger-full-access`) treat
+ * loopback-only clients as trusted; index, RPC, and WebSocket upgrades share
+ * this single rule so a page that loads cannot wedge into an
+ * authentication-reconnect loop.
+ */
+function isLoopbackDangerBypass(authority: string | undefined): boolean {
+  if (process.env.DSH_PERMISSION_MODE !== 'danger-full-access' || authority === undefined) {
+    return false
+  }
+  const hostname = authority.startsWith('[')
+    ? (authority.indexOf(']') === -1 ? authority : authority.slice(0, authority.indexOf(']') + 1))
+    : (authority.indexOf(':') === -1 ? authority : authority.slice(0, authority.indexOf(':')))
+  return isLoopbackHostname(hostname)
 }
 
 /** Read the exact generated cookie without implementing general Cookie decoding. */
@@ -279,13 +297,20 @@ export class BrowserAuth {
     return false
   }
 
+  private isLoopbackDangerBypass(authority: string | undefined): boolean {
+    return isLoopbackDangerBypass(authority)
+  }
+
   /**
-   * Verify the authority-bound browser cookie on a Host request.
+   * Verify the authority-bound browser cookie on a Host request. Under the
+   * loopback trust exemption ({@link isLoopbackDangerBypass}) every loopback
+   * request is trusted without a cookie.
    * @param request - request headers carrying Host and Cookie.
-   * @returns true only for an unexpired cookie signed by this activation's loaded secret.
+   * @returns true for the exemption or an unexpired cookie signed by this activation's loaded secret.
    */
   isAuthenticated(request: ConnectionTrustRequest): boolean {
     const authority = requestAuthority(request.headers)
+    if (this.isLoopbackDangerBypass(authority)) return true
     const rawCookie = header(request.headers, 'cookie')
     if (authority === undefined || rawCookie === undefined) return false
     const value = cookieValue(rawCookie, cookieName(authority))
