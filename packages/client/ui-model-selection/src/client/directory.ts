@@ -148,7 +148,7 @@ export class ModelDirectory {
     const retainedEffort = effort === undefined ? undefined
       : reasoning?.efforts.find(level => level.id === effort)?.name ?? effort
     if (catalog.status !== 'ready' || catalog.value === null || projected === undefined) {
-      this.store.set({
+      this.setIfChanged({
         current: catalog.value === null ? null : this.store.getSnapshot().current,
         ...retainedEffort === undefined ? {} : { retainedEffort },
         routable: null,
@@ -163,7 +163,7 @@ export class ModelDirectory {
     const selection = projected.next ?? catalog.value.default
     const routable = catalog.value.groups.some(group => group.id === selection.provider
       && group.models.some(model => model.id === selection.model))
-    this.store.set({
+    this.setIfChanged({
       current: selection,
       ...retainedEffort === undefined ? {} : { retainedEffort },
       routable,
@@ -176,6 +176,31 @@ export class ModelDirectory {
       error: null,
     })
   }
+
+  /**
+   * Publish only on a real change: subscribers re-render on every `store.set`,
+   * and a fresh-but-identical state object is what turned catalog refresh
+   * volleys (llm/adapters-updated, connection/reset) into render storms.
+   */
+  private setIfChanged(next: ModelDirectoryState): void {
+    const prev = this.store.getSnapshot()
+    if (prev.status === next.status
+      && prev.error === next.error
+      && prev.retainedEffort === next.retainedEffort
+      && prev.routable === next.routable
+      && (prev.groups === next.groups || (prev.groups.length === 0 && next.groups.length === 0))
+      && (prev.failures === next.failures || (prev.failures.length === 0 && next.failures.length === 0))
+      && sameSelection(prev.pending, next.pending)
+      && sameSelection(prev.current, next.current)) return
+    this.store.set(next)
+  }
+}
+
+function sameSelection(left: ModelSelection | null, right: ModelSelection | null): boolean {
+  if (left === null || right === null) return left === right
+  return left.provider === right.provider
+    && left.model === right.model
+    && left.reasoningEffort === right.reasoningEffort
 }
 
 function modelSelectionProjection(value: unknown): ModelSelectionProjection | undefined {

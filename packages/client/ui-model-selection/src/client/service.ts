@@ -16,6 +16,7 @@ import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol'
 import { WeakMapWithValues } from '@deepseek-ai/dsh-util-values'
 import { ModelCatalogDirectory } from './catalog.ts'
 import { ModelDirectory } from './directory.ts'
@@ -38,12 +39,21 @@ export class ModelDirectoryResolver extends Service {
 
   private readonly live: LiveState = { directories: new WeakMapWithValues() }
   private readonly catalog: ModelCatalogDirectory
+  /**
+   * Host session Remote namespace captured on the construction context. Methods
+   * run behind the caller-ctx tracker, whose scopes (the slots/commandUi inject
+   * scopes at the call sites) do not declare this sibling-provided subservice —
+   * reading `this.ctx.remote.session` there throws "cannot get property
+   * remote.session without inject".
+   */
+  private readonly sessionRemote: Pick<TypertClientRemote['session'], 'selectModel'>
 
   /**
    * @param ctx - owning root context (the service registers itself as `models`).
    */
   constructor(ctx: Context) {
     super(ctx, 'modelDirectories')
+    this.sessionRemote = ctx.remote.session
     this.catalog = new ModelCatalogDirectory(ctx)
     void this.catalog.load().catch(() => { /* selectors expose the shared error */ })
     ctx.on('connection/reset', () => {
@@ -72,7 +82,7 @@ export class ModelDirectoryResolver extends Service {
     const existing = live.directories.get(binding)
     if (existing !== undefined) return existing
     const directory = new ModelDirectory(
-      this.ctx.remote.session,
+      this.sessionRemote,
       sessionId,
       () => sessions.subagentAddress(sessionId) === undefined,
       this.catalog,

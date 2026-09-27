@@ -3,6 +3,7 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ModelCatalog, ModelSelection, ModelProviderGroup } from '@deepseek-ai/dsh-api-remotes/client'
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol'
 
 /** Observable lifecycle of the shared model catalog. */
 export interface ModelCatalogState {
@@ -34,11 +35,15 @@ export class ModelCatalogDirectory {
   private generation = 0
   private inflight: Promise<ModelCatalog> | undefined
 
+  private readonly sessionRemote: Pick<TypertClientRemote['session'], 'modelCatalog'>
+
   /**
    * @param ctx - the providing plugin's context, whose `remote.session`
    * namespace carries the Host-generation catalog.
    */
-  constructor(private readonly ctx: ClientContext) {}
+  constructor(ctx: ClientContext) {
+    this.sessionRemote = ctx.remote.session
+  }
 
   /**
    * Return the current generation's catalog, sharing its one in-flight load.
@@ -53,7 +58,7 @@ export class ModelCatalogDirectory {
       draft.status = 'loading'
       draft.error = null
     })
-    const operation = this.ctx.remote.session.modelCatalog().then((response) => {
+    const operation = this.sessionRemote.modelCatalog().then((response) => {
       if (!response.ok) {
         throw new Error(`${response.error.code}: ${response.error.message}`)
       }
@@ -88,20 +93,37 @@ export class ModelCatalogDirectory {
   private invalidate(clear = false): void {
     this.generation += 1
     this.inflight = undefined
-    const value = clear ? null : this.store.getSnapshot().value
+    const prev = this.store.getSnapshot()
+    const value = clear ? null : prev.value
+    // A refresh volley republishes nothing when the state is already idle.
+    if (prev.status === 'idle' && prev.value === value && prev.error === null) return
     this.store.set({ value, status: 'idle', error: null })
+  }
+
+  /** Coalesced reload: a volley of refresh events collapses into ONE RPC on the
+   *  microtask boundary, while each invalidation still lands synchronously so
+   *  consumers keep the last complete view until the fresh catalog arrives. */
+  private reloadScheduled = false
+
+  private scheduleReload(): void {
+    if (this.reloadScheduled) return
+    this.reloadScheduled = true
+    queueMicrotask(() => {
+      this.reloadScheduled = false
+      void this.load().catch(() => { /* the selector exposes the shared error */ })
+    })
   }
 
   /** Invalidate and reload the catalog after a Host-side model input changes. */
   refresh(): void {
     this.invalidate()
-    void this.load().catch(() => { /* the selector exposes the shared error */ })
+    this.scheduleReload()
   }
 
   /** Clear Host-specific values and load the replacement Host generation. */
   resetGeneration(): void {
     this.reasoning.clear()
     this.invalidate(true)
-    void this.load().catch(() => { /* the selector exposes the shared error */ })
+    this.scheduleReload()
   }
 }
